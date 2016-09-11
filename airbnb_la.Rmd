@@ -1,0 +1,197 @@
+---
+title: "airbnb_la"
+output: html_document
+---
+
+After having the 'la' data frame, further clean it.
+```{r}
+la1 <- la %>% dplyr::filter(room_type_category != 'shared_room', bed_type_category == 'real_bed', is_superhost == F, !(zipcode %in%c('', '0'))) %>% dplyr::select(-c(person_capacity, bed_type_category, is_superhost, zipcode)) %>% mutate(room_type_category = as.factor(as.character(room_type_category)))
+
+for (i in 1 : ncol(la1)) {
+  if (class(la1[ ,i]) == 'logical') {
+    la1[ ,i] <- as.factor(la1[ ,i])
+  }
+}
+```
+Estimate mean and price of Los Angeles airbnb posts.
+```{r}
+mean(la1$price)
+var(la1$price)
+```
+As a reference, the average price on Airbnb is $135.
+
+I am also interested in what amenities influence the price. First use the ID's to extract amenities of each listing and store them in the "amenities" and "amenities_id" data set.
+```{r}
+amenities <- vector('list', length(la1$id))
+amenities_id <- vector('list', length(la1$id))
+for (i in 1 : length(la1$id)) {
+  base_url1 <- 'https://api.airbnb.com/v2/listings/'
+base_url2 <-'?client_id=3092nxybyb0otqw18e8nh5nty&_format=v1_legacy_for_p3'
+  url <- paste0(base_url1, la1$id[i], base_url2)
+  try.test <- try(jsonlite::fromJSON(url, flatten = T), silent = T)
+  if ('try-error' %in% class(try.test)) {
+    next
+  }
+  else {
+    listing <- jsonlite::fromJSON(url, flatten = T)$listing
+    amenities[[i]] <- listing$amenities
+    amenities_id[[i]] <- listing$amenities_ids
+  }
+}
+
+# See which amenities_id corresponds to what amenity
+amenities_id_unlist <- unlist(amenities_id)
+amenities_unlist <- unlist(amenities)
+amenities_df <- cbind(amenities_id_unlist, amenities_unlist)
+amenities_df1 <- amenities_df[!duplicated(amenities_df), ]
+amenities_df1 <- data.frame(amenities_df1)
+colnames(amenities_df1) <- c('a.id', 'a')
+amenities_df1 <- amenities_df1 %>% mutate(a.id = as.numeric(as.character(a.id))) %>% arrange(a.id)
+
+# create indicator variables for each amenities
+# Design column names of the a.matrix
+colname.a <- character(nrow(amenities_df1) - 2)
+for (i in 1 : length(colname.a)) {
+  colname.a[i] <- paste0('a.id', amenities_df1$a.id[i])
+}
+
+# Fill the a.matrix
+a.matrix <- matrix(rep(0, nrow(la1) * (nrow(amenities_df1) - 2)), nrow = nrow(la1), ncol = nrow(amenities_df1) - 2)
+for (i in 1 : ncol(a.matrix)) {
+  for (j in 1 : nrow(a.matrix)) {
+    if (paste(amenities_df1$a.id[1 : (nrow(amenities_df1) - 2)][i]) %in% amenities_id[[j]]) {
+      a.matrix[j,i] = 1
+    }  
+  }
+}
+
+colnames(a.matrix) <- colname.a
+
+# Bind the a.matrix with the original ny1 data matrix
+la2 <- bind_cols(la1, data.frame(a.matrix))
+```
+Further clean the "city" and "property_type" variable.
+```{r}
+la2$city <- as.character(la2$city)
+la2$city[la2$city %in% c('Los Angeles ', 'Canoga Park', 'Hollywood', 'Van Nuys', 'Venice')] <- 'Los Angeles'
+la2$city <- as.factor(la2$city)
+
+la2$property_type <- as.character(la2$property_type)
+la2$property_type[la2$property_type == 'Bed & Breakfast'] <- 'Other'
+la2$property_type[la2$property_type %in% c('Bungalow', 'Cabin', 'Villa')] <- 'House'
+la2$property_type <- as.factor(la2$property_type)
+```
+Divide the data into training and testing data set.
+```{r}
+set.seed(7)
+train = sample(nrow(la2), as.integer(2 / 3 * nrow(la2)))
+train.la2 = la2[train, ]
+test.la2 = la2[-train, ]
+```
+Create a scaled version of ny2. First convert every column into numeric variables.
+```{r}
+la3 <- data.frame(la2)
+for (i in 1 : ncol(la3)) {
+  if(class(la3[,i]) == 'factor') {
+    la3[,i] <- as.numeric(la3[,i])
+  }
+}
+la3 <- scale(la3)
+la4 <- data.frame(la3)
+train.la4 <- la4[train, ]
+test.la4 <- la4[-train, ]
+```
+Use a variety of methods to see which one gives the lowest predicting MSE.
+```{r}
+# Random Forests
+library(rpart)
+set.seed(8)
+n <- names(train.la2)
+f <- as.formula(paste("price ~", paste(n[!n %in% c('price', 'id')], collapse = " + ")))
+rf.la <- rpart(f, data = train.la2)
+yhat.rf <- predict(rf.la, newdata = test.la2)
+mean((yhat.rf - test.la2$price)^2)
+
+# Boosting
+# Use "train" in "caret" to tune the parameter
+library(caret)
+fitControl <- trainControl(method = 'cv', number = 3, summaryFunction=defaultSummary)
+
+grid = expand.grid(n.trees = 5000, interaction.depth = 1, n.minobsinnode = 10, shrinkage = .001)
+caret.boost.la <- train(price ~ . - id, train.la2, method = 'gbm', tuneGrid = grid, trControl = fitControl)
+plot(caret.boost.la)
+# Turns out that n.tree = 2000 and interaction.depth = 2 combination is the best.
+
+library(gbm)
+boost.la <- gbm(price ~ . - id, data = train.la2, distribution = 'gaussian', n.trees = 5000, interaction.depth = 1)
+yhat.boost <- predict(boost.la, newdata = test.la2, n.trees = 5000, interaction.depth = 1)
+mean((yhat.boost - test.la2$price)^2)
+
+# LASSO
+library(glmnet)
+x = model.matrix(price ~ . - id, la2)[ , -1]
+y = la2$price
+grid = 10^seq(10, -2, length = 100)
+lasso.la = glmnet(x[train, ], y[train], alpha = 1, lambda = grid)
+set.seed(9)
+cv.out = cv.glmnet(x[train, ], y[train], alpha = 1)
+bestlam = cv.out$lambda.min
+yhat.lasso = predict(lasso.la, s = bestlam, newx = x[-train, ])
+mean((yhat.lasso - test.la2$price)^2)
+coef(glmnet(x, y, alpha = 1, lambda = bestlam))
+
+
+# Ridge regression
+x = model.matrix(price ~ . - id, la2)[ , -1]
+y = la2$price
+grid = 10^seq(10, -2, length = 100)
+ridge.la = glmnet(x[train, ], y[train], alpha = 0, lambda = grid)
+cv.out = cv.glmnet(x[train, ], y[train], alpha = 0)
+bestlam = cv.out$lambda.min
+yhat.ridge = predict(ridge.la, s = bestlam, newx = x[-train, ])
+mean((yhat.ridge - test.la2$price)^2)
+
+# Neural network using neuralnet
+fitControl <- trainControl(method = 'cv', number = 3, summaryFunction=defaultSummary)
+
+grid = expand.grid(layer1 = c(1, 3, 5), layer2 = c(1, 3, 5), layer3 = 1)
+caret.nn1.la <- train(price ~ . - id, train.la4, method = 'neuralnet', tuneGrid = grid, trControl = fitControl)
+plot(caret.nn1.la)
+
+n <- names(train.la4)
+f <- as.formula(paste("price ~", paste(n[!n %in% c('price', 'id')], collapse = " + ")))
+library(neuralnet)
+nn1.la <- neuralnet(f, train.la4, rep = 10, hidden = c(1, 5), linear.output = T)
+pr.nn1 <- compute(nn1.la, test.la4[-c(1, 4)])
+pr.nn1 <- pr.nn1$net.result * attributes(la3)$`scaled:scale`[3] + attributes(la3)$`scaled:scale`[3]
+mean((pr.nn1 - test.la2$price)^2)
+
+# Neural network using nnet
+n <- names(train.la4)
+f <- as.formula(paste("price ~", paste(n[!n %in% c('price', 'id')], collapse = " + ")))
+library(nnet)
+nn2.sf <- nnet(f, train.la4, size = 2, rang = .1, maxit = 200, decay = 5e-4, linear.output = T)
+pr.nn2 <- predict(nn2.la, test.la4[-c(1, 4)])
+pr.nn2 <- pr.nn2 * attributes(la3)$`scaled:scale`[4] + attributes(la3)$`scaled:scale`[4]
+mean((pr.nn2 - test.la1$price)^2)
+```
+The lasso method gives the lowest prediction MSE. Now visualize the data.
+```{r}
+coef(glmnet(x, y, alpha = 1, lambda = bestlam))
+# Plot the coefficients of different neighborhoods on the map
+zip <- readShapePoly("CAMS_ZIPCODE_STREET_SPECIFIC.shp")
+
+zip.la <- zip[zip$Name %in% levels(la$zipcode), ]
+
+colors <- brewer.pal(6, "YlGnBu")
+price.rank = matrix(nrow = nrow(zip), ncol = 1)
+name <- as.character(zip.la$Name)
+for (i in 1 : nrow(price.rank)) {
+  price.rank[i] = ifelse(name[i] %in% as.character(91008 : 91010), 1, ifelse(name[i] %in% as.character(90209 : 90213), 3, ifelse(name[i] %in% as.character(90401 : 90411), 4, ifelse(name[i] %in% as.character(90266 : 90267), 5, ifelse(name[i] %in% as.character(90263 : 90265), 6, 2)))))
+}
+legend.ch <- c('Duarte', 'Others', 'Beverly Hills', 'Santa Monica', 'Manhattan Beach', 'Malibu')
+par(mar = par('mar') + c(3, 0, 0, 0))
+plot(zip.la, col = colors[price.rank])
+legend('topleft', legend=legend.ch, fill=colors, bty="n", xpd = NA)
+```
+

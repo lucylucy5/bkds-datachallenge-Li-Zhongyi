@@ -1,0 +1,276 @@
+---
+title: "CASE-STUDY-INSTRUCTIONS"
+output: html_document
+---
+
+The url's of the posts of each city are extracted from the searching results of https://www.airbnb.com/s/New-York--NY using import.io. The results are saved as csv files and the column of the url's is named "name_url". The following "extract_airbnb" function is used to extract and clean the listing information. The "data_frame" variable is the row-binded imported csv files. The "city_name" variable is "ny" for New York, "sf" for San Francisco and "la" for Los Angeles.
+```{r}
+extract_airbnb <- function(data_frame, city_name) {
+  id_url <- data_frame$name_link
+  
+  # Extract ID's out of the url's and store them into the variable "id".
+  m <- regexpr('[0-9]+[0-9]+', id_url)
+  id <- regmatches(id_url, m)
+  
+  # Get rid of duplicate id's
+  id <- id[!duplicated(id)]
+  
+  # Use API to extract detailed information of the listings given their ID's.
+  base_url1 <- 'https://api.airbnb.com/v2/listings/'
+base_url2 <-'?client_id=3092nxybyb0otqw18e8nh5nty&_format=v1_legacy_for_p3'
+
+  # Extract the first line of the desired data frame.
+  url <- paste0(base_url1, id[1], base_url2)
+  ct <- jsonlite::fromJSON(url, flatten = T)
+  listing <- ct$listing
+  ct1 <- list(listing$id, listing$city, listing$instant_bookable, listing$price, listing$bathrooms, listing$bedrooms, listing$beds, listing$cancellation_policy, listing$min_nights, listing$person_capacity, listing$picture_count, listing$primary_host$identity_verified, listing$primary_host$is_superhost, listing$property_type, listing$reviews_count, listing$room_type_category, listing$zipcode, listing$bed_type_category, listing$require_guest_profile_picture, length(listing$amenities_ids), listing$cleaning_fee_native, listing$star_rating, listing$security_deposit_native, listing$review_rating_value)
+  # The null values are transformed into 0.
+  null_to_zero <- function(obj) {
+    return(ifelse(is.null(obj), 0, obj))
+  }
+  for (i in 1 : length(ct1)) {
+    ct1[[i]] <- null_to_zero(ct1[[i]])
+  }
+  ct1 <- matrix(ct1, nrow = 1, ncol = length(ct1))
+  ct2 <- ct1
+  # Extract all the listings corresponding to the ID's.
+  for (i in 1 : length(id)) {
+    url <- paste0(base_url1, id[i], base_url2)
+    try.test <- try(jsonlite::fromJSON(url, flatten = T), silent = T)
+    if ('try-error' %in% class(try.test)) {
+      next
+    }
+    else {
+      listing <- jsonlite::fromJSON(url, flatten = T)$listing
+    }
+    ct3 <- list(listing$id, listing$city, listing$instant_bookable, listing$price, listing$bathrooms, listing$bedrooms, listing$beds, listing$cancellation_policy, listing$min_nights, listing$person_capacity, listing$picture_count, listing$primary_host$identity_verified, listing$primary_host$is_superhost, listing$property_type, listing$reviews_count, listing$room_type_category, listing$zipcode, listing$bed_type_category, listing$require_guest_profile_picture, length(listing$amenities_ids), listing$cleaning_fee_native, listing$star_rating, listing$security_deposit_native, listing$review_rating_value)
+    for (i in 1 : length(ct3)) {
+      ct3[[i]] <- null_to_zero(ct3[[i]])
+    }
+    ct3 <- matrix(ct3, nrow = 1, ncol = length(ct3))
+    ct2 <- rbind(ct2, ct3)
+  }
+  ct4 <- apply(ct2, 2, unlist)
+  ct4 <- apply(ct4, 2, as.factor)
+  ct4 <- data.frame(ct4)
+  names(ct4) <- c('id', 'city', 'instant_bookable', 'price', 'bathrooms', 'bedrooms', 'beds', 'cancellation_policy', 'min_nights', 'person_capacity', 'picture_count', 'identity_verified', 'is_superhost', 'property_type', 'reviews_count', 'room_type_category', 'zipcode', 'bed_type_category', 'require_guest_profile_picture', 'length_amenities_ids', 'cleaning_fee_native', 'star_rating', 'security_deposit_native', 'review_rating_value')
+  
+  # Transform the following variables into numeric variables.
+  mut_par <- c('price', 'bedrooms', 'bathrooms', 'beds', 'min_nights', 'person_capacity', 'picture_count', 'length_amenities_ids', 'cleaning_fee_native', 'security_deposit_native', 'review_rating_value', 'reviews_count', 'star_rating')
+  index <- numeric(length(mut_par))
+  for (i in 1 : length(mut_par)) {
+    index[i] <- grep(mut_par[i], colnames(ct4))
+  }
+  chr_to_num <- function(chr) {
+    return(as.numeric(as.character(chr)))
+  }
+  
+  # Cleaning fee is considered part of the price.
+  for (i in index) {
+    ct4[,i] <- chr_to_num(ct4[,i])
+  }
+  ct4 <- ct4 %>% mutate(price = price + cleaning_fee_native) %>% dplyr::select(-cleaning_fee_native)
+  ct5 <- ct4
+  
+  # Rename the data frame using the "city_name". For example, the data frame of San Francisco is named "sf".
+  assign(city_name, ct5)
+  # Save the data frame into an CSV file.
+  write.table(ct5, paste0('airbnb_', city_name, '.csv'))
+}
+```
+Each city's data frame needs to be further tailor-cleaned.
+# New York
+The neighborhoods of New York include "New York", "Bronx", "Brooklyn", "Queens", "Staten Island". There are four observations from a city in New Jersey called Hillside, which is close to New York city.
+```{r}
+ny$city <- as.character(ny$city)
+ny$city[ny$city == 'Bronx '] <- 'Bronx'
+ny$city[ny$city %in% c('Brookline', 'Brooklyn ')] <- 'Brooklyn'
+ny$city[ny$city %in% c('Long Island', 'Long Island City', 'Jackson Heights', 'Flushing', 'Sunnyside ')] <- 'Queens'
+ny$city[ny$city == 'NYC '] <- 'New York'
+ny$city <- as.factor(ny$city)
+```
+The ID's and zipcodes are not valuable in analysis. Zipcodes are not used since New York is divided into neighborhoods, which is stored in the "city" variable. "Shared_room" data is not included in analysis because room sharing is usually not a concern for property management company. "Person_capacity" variable is not included because it is highly correlated with the bed variable.
+```{r}
+library(dplyr)
+ny1 <- ny %>% dplyr::filter(room_type_category != 'shared_room' & bed_type_category == 'real_bed', is_superhost == F) %>% dplyr::select(-c(zipcode, person_capacity, bed_type_category, is_superhost)) %>% mutate(room_type_category = as.factor(as.character(room_type_category)))
+for (i in 1 : ncol(ny1)) {
+  if (class(ny1[ ,i]) == 'logical') {
+    ny1[ ,i] <- as.factor(ny1[ ,i])
+  }
+}
+```
+Calculate the mean and standard deviation of the price in New York.
+```{r}
+mean(ny1$price)
+sd(ny1$price)
+```
+As a reference, the average value in New York given by airbnb is $127. Now investigate prediction of price.
+
+I am also interested in what amenities influence the price. First use the ID's to extract amenities of each listing and store them in the "amenities" and "amenities_id" data set.
+```{r}
+amenities <- vector('list', length(ny1$id))
+amenities_id <- vector('list', length(ny1$id))
+for (i in 1 : length(ny1$id)) {
+  base_url1 <- 'https://api.airbnb.com/v2/listings/'
+base_url2 <-'?client_id=3092nxybyb0otqw18e8nh5nty&_format=v1_legacy_for_p3'
+  url <- paste0(base_url1, ny1$id[i], base_url2)
+  try.test <- try(jsonlite::fromJSON(url, flatten = T), silent = T)
+  if ('try-error' %in% class(try.test)) {
+    next
+  }
+  else {
+    listing <- jsonlite::fromJSON(url, flatten = T)$listing
+    amenities[[i]] <- listing$amenities
+    amenities_id[[i]] <- listing$amenities_ids
+  }
+}
+
+# See which amenities_id corresponds to what amenity
+amenities_id_unlist <- unlist(amenities_id)
+amenities_unlist <- unlist(amenities)
+amenities_df <- cbind(amenities_id_unlist, amenities_unlist)
+amenities_df1 <- amenities_df[!duplicated(amenities_df), ]
+amenities_df1 <- data.frame(amenities_df1)
+colnames(amenities_df1) <- c('a.id', 'a')
+amenities_df1 <- amenities_df1 %>% mutate(a.id = as.numeric(as.character(a.id))) %>% arrange(a.id)
+
+# create indicator variables for each amenities
+# Design column names of the a.matrix
+colname.a <- character(nrow(amenities_df1) - 2)
+for (i in 1 : length(colname.a)) {
+  colname.a[i] <- paste0('a.id', amenities_df1$a.id[i])
+}
+
+# Fill the a.matrix
+a.matrix <- matrix(rep(0, nrow(ny1) * (nrow(amenities_df1) - 2)), nrow = nrow(ny1), ncol = nrow(amenities_df1) - 2)
+for (i in 1 : ncol(a.matrix)) {
+  for (j in 1 : nrow(a.matrix)) {
+    if (paste(amenities_df1$a.id[1 : (nrow(amenities_df1) - 2)][i]) %in% amenities_id[[j]]) {
+      a.matrix[j,i] = 1
+    }  
+  }
+}
+
+colnames(a.matrix) <- colname.a
+
+# Bind the a.matrix with the original ny1 data matrix
+ny2 <- bind_cols(ny1, data.frame(a.matrix))
+```
+Divide the data into training and test data.
+```{r}
+set.seed(3)
+train = sample(nrow(ny1), as.integer(2 / 3 * nrow(ny1)))
+train.ny1 = ny1[train, ]
+test.ny1 = ny1[-train, ]
+
+train.ny2 = ny2[train, ]
+test.ny2 = ny2[-train, ]
+
+# Create a scaled version of ny2. First convert every column into numeric variables.
+ny3 <- data.frame(ny2)
+for (i in 1 : ncol(ny3)) {
+  if(class(ny3[,i]) == 'factor') {
+    ny3[,i] <- as.numeric(ny3[,i])
+  }
+}
+ny3 <- scale(ny3)
+ny4 <- data.frame(ny3)
+train.ny4 <- ny4[train, ]
+test.ny4 <- ny4[-train, ]
+```
+Use a variety of methods to see which one gives the lowest predicting MSE.
+```{r}
+# Random Forests
+library(rpart)
+set.seed(4)
+n <- names(train.ny2)
+f <- as.formula(paste("price ~", paste(n[!n %in% c('price', 'id')], collapse = " + ")))
+rf.ny <- rpart(f, data = train.ny2, subset = train)
+yhat.rf <- predict(rf.ny, newdata = test.ny2)
+mean((yhat.rf - test.ny2$price)^2)
+
+# Boosting
+# Use "train" in "caret" to tune the parameter
+library(caret)
+fitControl <- trainControl(method = 'cv', number = 3, summaryFunction=defaultSummary)
+
+grid = expand.grid(n.trees = 2000, interaction.depth = 3, n.minobsinnode = 10, shrinkage = .001)
+caret.boost.ny <- train(price ~ . - id, train.ny2, method = 'gbm', tuneGrid = grid, trControl = fitControl)
+plot(caret.boost.ny)
+# Turns out that n.tree = 2000 and interaction.depth = 2 combination is the best.
+
+library(gbm)
+boost.ny <- gbm(price ~ . - id, data = train.ny2, distribution = 'gaussian', n.trees = 2000, interaction.depth = 3)
+yhat.boost <- predict(boost.ny, newdata = test.ny2, n.trees = 2000, interaction.depth = 3)
+mean((yhat.boost - test.ny2$price)^2)
+
+# LASSO
+library(glmnet)
+x = model.matrix(price ~ . - id, ny2)[ , -1]
+y = ny2$price
+grid = 10^seq(10, -2, length = 100)
+lasso.ny = glmnet(x[train, ], y[train], alpha = 1, lambda = grid)
+set.seed(2)
+cv.out = cv.glmnet(x[train, ], y[train], alpha = 1)
+bestlam = cv.out$lambda.min
+yhat.lasso = predict(lasso.ny, s = bestlam, newx = x[-train, ])
+mean((yhat.lasso - test.ny2$price)^2)
+
+# Ridge regression
+x = model.matrix(price ~ . - id, ny2)[ , -1]
+y = ny2$price
+grid = 10^seq(10, -2, length = 100)
+ridge.ny = glmnet(x[train, ], y[train], alpha = 0, lambda = grid)
+cv.out = cv.glmnet(x[train, ], y[train], alpha = 0)
+bestlam = cv.out$lambda.min
+yhat.ridge = predict(ridge.ny, s = bestlam, newx = x[-train, ])
+mean((yhat.ridge - test.ny2$price)^2)
+
+# Neural network using neuralnet
+fitControl <- trainControl(method = 'cv', number = 3, summaryFunction=defaultSummary)
+
+grid = expand.grid(layer1 = 1, layer2 = 1, layer3 = 1)
+caret.nn1.ny <- train(price ~ . - id, train.ny4, method = 'neuralnet', tuneGrid = grid, trControl = fitControl)
+plot(caret.nn1.ny)
+# Looks like layer1 = layer2 = layer3 = 1 gives the lowest prediction MSE in cross-validation
+
+n <- names(train.ny4)
+f <- as.formula(paste("price ~", paste(n[!n %in% c('price', 'id')], collapse = " + ")))
+library(neuralnet)
+nn1.ny <- neuralnet(f, train.ny4, rep = 10, linear.output = T)
+pr.nn1 <- compute(nn1.ny, test.ny4[-c(1, 4)])
+pr.nn1 <- pr.nn1$net.result * attributes(ny3)$`scaled:scale`[4] + attributes(ny3)$`scaled:scale`[4]
+mean((pr.nn1 - test.ny4$price)^2)
+
+# Neural network using nnet
+n <- names(train.ny4)
+f <- as.formula(paste("price ~", paste(n[!n %in% c('price', 'id')], collapse = " + ")))
+library(nnet)
+nn2.ny <- nnet(f, train.ny4, size = 2, rang = .1, maxit = 200, decay = 5e-4, linear.output = T)
+pr.nn2 <- predict(nn2.ny, test.ny4[-c(1, 4)])
+pr.nn2 <- pr.nn2 * attributes(ny3)$`scaled:scale`[4] + attributes(ny3)$`scaled:scale`[4]
+mean((pr.nn2 - test.ny4$price)^2)
+```
+Ridge regression gives the lowest predicting MSE.
+
+Data visualization
+```{r}
+pred.coef.ridge.ny <- predict(ridge.ny, type = 'coef')
+str(pred.coef.ridge.ny)
+pred.coef.ridge.ny@Dimnames[[1]]
+ridge.ny.coef <- coef(ridge.ny, s = 0.1)
+ridge.ny.coef <- data.frame(ridge.ny.coef)
+
+# Plot the coefficients of different neighborhoods on the map
+zip <- readShapePoly("ZIP_CODE_040114.shp")
+colors <- brewer.pal(5, "YlOrRd")
+price.rank = matrix(nrow = nrow(zip), ncol = 1)
+for (i in 1 : nrow(price.rank)) {
+  price.rank[i] = ifelse(zip$COUNTY[i] == 'Richmond', 1, ifelse(zip$COUNTY[i] == 'Kings', 2, ifelse(zip$COUNTY[i] == 'Queens', 3, ifelse(zip$COUNTY[i] == 'Bronx', 4, ifelse(zip$COUNTY[i] == 'New York', 5, 0)))))
+}
+legend.ch <- c('Staten Island', 'Brooklyn', 'Queens', 'Bronx', 'New York')
+plot(zip, col = colors[price.rank], main = 'Relative effect of neighborhoods on airbnb price')
+legend('topleft', legend=legend.ch, fill=colors, bty="n")
+```
+
+
